@@ -1,0 +1,130 @@
+
+#######
+# Claude
+#######
+
+# --- Helpers couleur d'onglet iTerm2 (RGB 0-255) ---
+_set_tab_color() {
+  printf '\033]6;1;bg;red;brightness;%s\a'   "$1"
+  printf '\033]6;1;bg;green;brightness;%s\a' "$2"
+  printf '\033]6;1;bg;blue;brightness;%s\a'  "$3"
+}
+
+_reset_tab_color() {
+  printf '\033]6;1;bg;*;default\a'
+}
+
+# --- Helpers badge iTerm2 ---
+_set_badge() {
+  printf '\033]1337;SetBadgeFormat=%s\a' "$(printf '%s' $1\\n$2\ | base64)"
+}
+
+_reset_badge() {
+  printf '\033]1337;SetBadgeFormat=%s\a' "$(printf '%s' "" | base64)"
+}
+
+# --- Lancement de Claude avec un profil donné ---
+_claude_launch() {
+  if [[ -f "$HOME/.claude.json" ]]; then
+    echo "❌ Erreur: Le fichier $HOME/.claude.json existe déjà. Veuillez le supprimer avant de lancer Claude." >&2
+    return 1
+  fi
+
+  local profile="$1"
+
+  # Vérifier que le répertoire de config existe
+  if [[ ! -d "$HOME/.claude-$profile" ]]; then
+    echo "❌ Erreur: Le répertoire $HOME/.claude-$profile n'existe pas." >&2
+    return 1
+  fi
+
+  clear
+
+  # Couleur d'onglet : orange officiel Claude (#D97757)
+  _set_tab_color 217 119 87
+
+  # Badge iTerm2 avec le nom du profil en majuscules
+  # (le titre de l'onglet reste géré par le CLI = "Claude Code")
+  _set_badge "${profile:u}" $(basename "$PWD")
+  echo "🚀 Lancement de Claude avec le profil: $profile"
+
+  CLAUDE_CONFIG_DIR="$HOME/.claude-$profile/cli" CLAUDE_PROFILE="$profile" command claude
+
+  # Reset couleur + badge en sortant
+  _reset_badge
+  _reset_tab_color
+}
+
+# --- Fonction pour chercher .claude-profile en remontant les dossiers ---
+_find_claude_profile() {
+  local current_dir="$(pwd)"
+
+  while [[ "$current_dir" != "/" ]]; do
+    if [[ -f "$current_dir/.claude-profile" ]]; then
+      echo "$current_dir/.claude-profile"
+      return 0
+    fi
+
+    # Arrêter la recherche si on atteint le home
+    if [[ "$current_dir" == "$HOME" ]]; then
+      break
+    fi
+
+    current_dir="$(dirname "$current_dir")"
+  done
+
+  return 1
+}
+
+# --- Fonction principale qui gère la logique du profil ---
+claude() {
+  local profile=""
+  local valid_profiles=("perso" "sfeir" "kering")
+  local profile_file=""
+
+  # Si un profil est passé en argument
+  if [[ -n "$1" ]]; then
+    profile="$1"
+
+    # Vérifier que le profil est valide
+    if [[ ! " ${valid_profiles[@]} " =~ " ${profile} " ]]; then
+      echo "❌ Erreur: Profil '$profile' non reconnu." >&2
+      echo "📋 Profils disponibles: ${valid_profiles[*]}" >&2
+      return 1
+    fi
+
+    # Sauvegarder dans le .claude-profile du dossier courant
+    echo "$profile" > ".claude-profile"
+    echo "✅ Profil défini localement: $profile (fichier: $(pwd)/.claude-profile)"
+  else
+    # Chercher le fichier .claude-profile en remontant les dossiers
+    profile_file=$(_find_claude_profile)
+
+    if [[ $? -eq 0 ]]; then
+      # Fichier trouvé
+      profile=$(cat "$profile_file" | xargs)
+      echo "📂 Utilisation du profil: $profile ($profile_file)"
+    else
+      # Aucun fichier trouvé
+      echo "❌ Erreur: Aucun fichier .claude-profile trouvé." >&2
+      echo "   - Cherche à partir de: $(pwd)" >&2
+      echo "   - Remonte jusqu'à: $HOME" >&2
+      echo "📝 Veuillez spécifier un profil: claude <profile-name>" >&2
+      echo "📋 Profils disponibles: ${valid_profiles[*]}" >&2
+      return 1
+    fi
+
+    if [[ -z "$profile" ]]; then
+      echo "❌ Erreur: Le fichier $profile_file est vide." >&2
+      return 1
+    fi
+  fi
+
+  # Lancer Claude avec le profil
+  _claude_launch "$profile"
+}
+
+# --- Raccourcis pratiques ---
+claude-perso()  { claude perso }
+claude-sfeir()  { claude sfeir }
+claude-kering() { claude kering }

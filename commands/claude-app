@@ -1,0 +1,314 @@
+#!/bin/zsh
+
+# ============================================================================
+# claude-app - Launch Claude.app with a specific profile
+# ============================================================================
+#
+# Usage:
+#   claude-app <profile-name>
+#   claude-app perso
+#   claude-app sfeir
+#
+# Features:
+#   - Standalone executable (no .zshrc loading required)
+#   - Can be used like any system command (ls, ll, etc.)
+#   - Clears cache for clean profile switching
+#   - Auto-discovers profiles from ~/.claude-*
+#   - iTerm2 badge support
+#
+# Installation:
+#   sudo cp claude-app /usr/local/bin/
+#   chmod +x /usr/local/bin/claude-app
+#
+# ============================================================================
+
+# Note: We don't use 'set -e' to allow better error handling
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+readonly SCRIPT_NAME="${0:t}"
+readonly SCRIPT_DIR="${0:A:h}"
+readonly HOME_DIR="$HOME"
+
+source "$SCRIPT_DIR/../lib/colors.sh"
+source "$SCRIPT_DIR/../lib/messages.sh"
+source "$SCRIPT_DIR/../lib/profiles.sh"
+source "$SCRIPT_DIR/../lib/app-storage.sh"
+
+# Try multiple possible paths for Claude.app
+find_claude_app() {
+  local possible_paths=(
+    "/Applications/Claude.app/Contents/MacOS/Claude"
+    "/Applications/Claude/Claude"
+  )
+
+  for path in "${possible_paths[@]}"; do
+    if [[ -x "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+readonly CLAUDE_APP_PATH=$(find_claude_app)
+
+# ============================================================================
+# Validation
+# ============================================================================
+
+check_claude_app() {
+  if [[ ! -x "$CLAUDE_APP_PATH" ]]; then
+    print_error "Claude.app not found at: $CLAUDE_APP_PATH"
+    print_info "Visit: https://claude.ai to download Claude"
+    return 1
+  fi
+  return 0
+}
+
+# ============================================================================
+# Profile Storage <-> macOS Library mapping
+# ============================================================================
+#
+# APP_STORAGE_MAP is defined in lib/app-storage.sh, shared with
+# claude-app-unlink.
+#
+# SAFETY:
+#   - remove_symlink ONLY unlinks symlinks — it never deletes a real directory.
+#   - On first run the Library paths are real directories; create_symlink
+#     MIGRATES them into the profile (mv) rather than destroying them. If the
+#     profile already holds data, the stray real directory is moved aside to
+#     "<path>.bak.<pid>" instead of being overwritten.
+#   - Claude CLI data (~/.claude-*/cli, ~/.claude.json, ~/.config/claude) is
+#     never referenced here.
+#
+# ============================================================================
+
+# Create symlinks from the macOS Library locations into the active profile.
+#   $1 = the profile's app storage dir, e.g. ~/.claude-kering/app
+create_symlink() {
+  local config_dir="$1"
+  local key profile_target library_path
+
+  for key in "${(@k)APP_STORAGE_MAP}"; do
+    library_path="${APP_STORAGE_MAP[$key]}"
+    profile_target="$config_dir/$key"
+
+    # Ensure the parent of the profile target exists
+    mkdir -p "${profile_target:h}"
+
+    # If the Library path is a REAL entry (not a symlink), migrate it once so
+    # we never lose existing data.
+    if [[ -e "$library_path" && ! -L "$library_path" ]]; then
+      if [[ ! -e "$profile_target" ]]; then
+        mv "$library_path" "$profile_target"
+        print_info "Migrated existing data: ${library_path/#$HOME_DIR/~} → ${profile_target/#$HOME_DIR/~}"
+      else
+        mv "$library_path" "${library_path}.bak.$$"
+        print_warning "Moved stray data aside: ${library_path/#$HOME_DIR/~}.bak.$$"
+      fi
+    fi
+
+    # Make sure the profile target and the Library parent exist
+    mkdir -p "$profile_target"
+    mkdir -p "${library_path:h}"
+
+    # Create (or re-point) the symlink. -f: force, -n: replace an existing
+    # symlink-to-dir instead of creating the link inside it.
+    ln -sfn "$profile_target" "$library_path"
+    print_success "Linked: ${library_path/#$HOME_DIR/~} → ${profile_target/#$HOME_DIR/~}"
+  done
+}
+
+# Remove the Library symlinks created by create_symlink.
+# ONLY unlinks symlinks — real directories are left untouched.
+remove_symlink() {
+  local config_dir="$1"  # unused, kept for a symmetric signature
+  local key library_path
+
+  for key in "${(@k)APP_STORAGE_MAP}"; do
+    library_path="${APP_STORAGE_MAP[$key]}"
+
+    if [[ -L "$library_path" ]]; then
+      rm -f "$library_path"
+      print_info "Unlinked: ${library_path/#$HOME_DIR/~}"
+    fi
+  done
+}
+
+# ============================================================================
+# Quit a running Claude.app
+# ============================================================================
+#
+# The symlinks below feed Claude.app's data directories, so we must not swap
+# them while the app is live (single-instance app → session corruption).
+#
+# If a Claude window is already open, we alert the user and let them choose to
+# close it before switching profile. If they decline, the launch is aborted.
+# Returns 0 to proceed, 1 to abort.
+
+# Wait (up to ~10s) for Claude.app to fully exit.
+wait_for_claude_quit() {
+  local i
+  for i in {1..20}; do
+    if ! pgrep -x "Claude" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+confirm_and_quit_claude_app() {
+  # Nothing to do if it isn't running
+  if ! pgrep -x "Claude" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local proceed=1  # 1 = close & continue, 0 = cancel
+  local btn rc=1
+
+  # Prefer a native macOS alert; fall back to a terminal prompt when no GUI
+  # dialog is available (e.g. headless / ssh).
+  if command -v osascript >/dev/null 2>&1; then
+    btn=$(osascript <<'OSA' 2>/dev/null
+set theResult to display dialog "Une fenêtre Claude est déjà ouverte." & return & return & "Elle doit être fermée avant d'ouvrir un autre profil." with title "Claude Profile Manager" buttons {"Annuler", "Fermer et continuer"} default button "Fermer et continuer" with icon caution
+button returned of theResult
+OSA
+)
+    rc=$?
+  fi
+
+  if [[ $rc -eq 0 && -n "$btn" ]]; then
+    [[ "$btn" == "Fermer et continuer" ]] && proceed=1 || proceed=0
+  else
+    # No GUI dialog (or it was dismissed) → ask in the terminal
+    print_warning "Une fenêtre Claude.app est déjà ouverte."
+    if read -q "?Fermer Claude.app et continuer ? (y/n) "; then
+      echo ""
+      proceed=1
+    else
+      echo ""
+      proceed=0
+    fi
+  fi
+
+  if [[ $proceed -ne 1 ]]; then
+    print_info "Annulé — le profil n'a pas été ouvert."
+    return 1
+  fi
+
+  print_info "Fermeture de Claude.app..."
+  osascript -e 'quit app "Claude"' >/dev/null 2>&1
+
+  if wait_for_claude_quit; then
+    print_success "Claude.app has quit"
+    return 0
+  fi
+
+  # Still running after a clean quit request — offer to force-quit.
+  print_warning "Claude.app ne s'est pas fermée."
+  if read -q "?Forcer la fermeture ? (y/n) "; then
+    echo ""
+    pkill -x "Claude" 2>/dev/null
+    if wait_for_claude_quit; then
+      print_success "Claude.app a été forcée à quitter"
+      return 0
+    fi
+    print_error "Impossible de fermer Claude.app"
+    return 1
+  else
+    echo ""
+    print_info "Annulé — le profil n'a pas été ouvert."
+    return 1
+  fi
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+main() {
+  # Check arguments
+  if [[ $# -eq 0 ]]; then
+    print_error "Missing profile name"
+    echo ""
+    echo "Usage: $SCRIPT_NAME <profile-name>"
+    echo ""
+    echo "Available profiles:"
+    discover_profiles 2>/dev/null | sed 's/^/  - /' || {
+      echo "  (none)"
+    }
+    return 1
+  fi
+
+  local profile="$1"
+
+  # Validate profile
+  if ! validate_profile "$profile"; then
+    return 1
+  fi
+
+  # Check Claude.app installed
+  if ! check_claude_app; then
+    return 1
+  fi
+
+  local config_dir="$HOME_DIR/.claude-$profile/app"
+
+  print_info "Launching Claude.app with profile: $profile"
+
+  # Make sure the app isn't running before we swap its data directories,
+  # otherwise the live session would be corrupted. If a window is already open,
+  # the user is alerted and may cancel the launch here.
+  if ! confirm_and_quit_claude_app; then
+    return 1
+  fi
+
+  # Swap symlinks: drop the previous profile's links, then link this profile.
+  remove_symlink "$config_dir"
+  create_symlink "$config_dir"
+
+  # Launch with profile configuration
+  print_info "Starting Claude.app at: $CLAUDE_APP_PATH"
+
+  if [[ -z "$CLAUDE_APP_PATH" ]]; then
+    print_error "Claude.app not found on this system"
+    print_info "Please check that Claude is installed in /Applications/"
+    return 1
+  fi
+
+  # CLAUDE_CONFIG_DIR uses its OWN dedicated folder ("config"), kept separate
+  # from "data" (which mirrors ~/Library/Application Support/Claude via symlink)
+  # to avoid any confusion between the two.
+  local claude_config_dir="$config_dir/config"
+  mkdir -p "$claude_config_dir"
+
+  # Launch the app in the background.
+  CLAUDE_CONFIG_DIR="$claude_config_dir" \
+  CLAUDE_PROFILE="$profile" \
+  "$CLAUDE_APP_PATH" > /dev/null 2>&1 &
+
+  local app_pid=$!
+
+  # Give the app a moment to start
+  sleep 1
+
+  # Check if process is still running
+  if ! kill -0 "$app_pid" 2>/dev/null; then
+    print_warning "Claude.app may have exited immediately (check system logs)"
+    print_info "Symlinks left in place; run 'claude-app $profile' again to retry."
+    return 1
+  fi
+
+  print_success "Claude.app launched with profile: $profile (PID: $app_pid)"
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+main "$@"

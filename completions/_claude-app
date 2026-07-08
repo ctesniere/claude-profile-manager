@@ -1,0 +1,24 @@
+#compdef claude-app
+
+# ============================================================================
+# Zsh completion for claude-app
+# ============================================================================
+#
+# Installation with Oh-My-Zsh:
+#   1. Copy this file to: ~/.oh-my-zsh/completions/_claude-app
+#      (create the directory if it doesn't exist: mkdir -p ~/.oh-my-zsh/completions)
+#   2. Reload shell: exec zsh
+#
+# Alternative installation (any zsh setup):
+#   1. Copy to any directory in $fpath (e.g., /usr/local/share/zsh/site-functions/)
+#   2. Reload shell: exec zsh
+#
+# The candidate-discovery logic is shared with _claude-cli via
+# lib/completion.sh.
+#
+# ============================================================================
+
+local self="${(%):-%x}"
+source "${self:A:h}/../lib/completion.sh"
+
+_claude_profile_candidates 'Claude.app profile'

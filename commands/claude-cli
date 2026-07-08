@@ -1,0 +1,122 @@
+#!/bin/zsh
+
+# ============================================================================
+# claude-cli - Launch Claude CLI with a specific profile
+# ============================================================================
+#
+# Usage:
+#   claude-cli <profile-name>
+#   claude-cli perso
+#   claude-cli sfeir
+#
+# Features:
+#   - Standalone executable (no .zshrc loading required)
+#   - Can be used like any system command (ls, ll, etc.)
+#   - Tab completion support
+#   - Auto-discovers profiles from ~/.claude-*
+#
+# Installation:
+#   sudo cp claude-cli /usr/local/bin/
+#   chmod +x /usr/local/bin/claude-cli
+#
+# ============================================================================
+
+set -e
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+readonly SCRIPT_NAME="${0:t}"
+readonly SCRIPT_DIR="${0:A:h}"
+readonly HOME_DIR="$HOME"
+
+source "$SCRIPT_DIR/../lib/colors.sh"
+source "$SCRIPT_DIR/../lib/messages.sh"
+source "$SCRIPT_DIR/../lib/profiles.sh"
+
+set_tab_color() {
+  printf '\033]6;1;bg;red;brightness;%s\a'   "$1"
+  printf '\033]6;1;bg;green;brightness;%s\a' "$2"
+  printf '\033]6;1;bg;blue;brightness;%s\a'  "$3"
+}
+
+reset_tab_color() {
+  printf '\033]6;1;bg;*;default\a'
+}
+
+set_badge() {
+  printf '\033]1337;SetBadgeFormat=%s\a' "$(printf '%s' $1\\n$2\ | base64)"
+}
+
+reset_badge() {
+  printf '\033]1337;SetBadgeFormat=%s\a' "$(printf '%s' "" | base64)"
+}
+
+# ============================================================================
+# Validation
+# ============================================================================
+
+check_claude_cli() {
+  if ! command -v claude &> /dev/null; then
+    print_error "Claude CLI not found. Please install it first."
+    print_info "Visit: https://claude.ai"
+    return 1
+  fi
+  return 0
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+main() {
+  # Check arguments
+  if [[ $# -eq 0 ]]; then
+    print_error "Missing profile name"
+    echo ""
+    echo "Usage: $SCRIPT_NAME <profile-name>"
+    echo ""
+    echo "Available profiles:"
+    discover_profiles 2>/dev/null | sed 's/^/  - /' || {
+      echo "  (none)"
+    }
+    return 1
+  fi
+
+  local profile="$1"
+  shift  # Remove first argument, pass rest to claude
+
+  # Validate profile
+  if ! validate_profile "$profile"; then
+    return 1
+  fi
+
+  # Check Claude CLI installed
+  if ! check_claude_cli; then
+    return 1
+  fi
+
+  # Set environment variables
+  local config_dir="$HOME_DIR/.claude-$profile/cli"
+
+  # Set iTerm badge (profile name + current directory) and make sure it's
+  # reset once Claude exits, even on Ctrl-C or an error.
+  if [[ -n "$ITERM_SESSION_ID" ]]; then
+    set_badge "${profile:u}" "$(basename "$PWD")"
+    trap 'reset_badge' EXIT INT TERM
+  fi
+
+  print_info "Launching Claude CLI with profile: $profile"
+
+  # Launch with profile configuration
+  CLAUDE_CONFIG_DIR="$config_dir" \
+  CLAUDE_PROFILE="$profile" \
+  command claude "$@"
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+main "$@"
