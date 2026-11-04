@@ -30,7 +30,7 @@ find_completions_dir() {
   )
 
   for dir in "${candidates[@]}"; do
-    if [[ -f "$dir/_claude-cli" ]] && [[ -f "$dir/_claude-app" ]]; then
+    if [[ -f "$dir/_claude-cli" ]]; then
       # Return absolute path
       (cd "$dir" && pwd)
       return 0
@@ -86,13 +86,15 @@ install_completions() {
   ln -s "$source_dir/_claude-cli" "$target_cli"
   print_success "Installed: $target_cli"
 
-  # Install _claude-app
-  local target_app="$COMPLETIONS_DIR/_claude-app"
-  if [[ -e "$target_app" ]] || [[ -L "$target_app" ]]; then
-    rm -f "$target_app"
+  # Install _claude-app, if present (local-only extra, not tracked in git)
+  if [[ -f "$source_dir/_claude-app" ]]; then
+    local target_app="$COMPLETIONS_DIR/_claude-app"
+    if [[ -e "$target_app" ]] || [[ -L "$target_app" ]]; then
+      rm -f "$target_app"
+    fi
+    ln -s "$source_dir/_claude-app" "$target_app"
+    print_success "Installed: $target_app"
   fi
-  ln -s "$source_dir/_claude-app" "$target_app"
-  print_success "Installed: $target_app"
 }
 
 # ----------------------------------------------------------------------------

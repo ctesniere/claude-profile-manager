@@ -66,28 +66,30 @@ install_scripts() {
 
   determine_install_dir
 
-  # Look for scripts/ directory relative to current working directory
+  # Look for scripts/ directory relative to current working directory.
+  # Only claude-cli is required — claude-app is a local-only extra (not
+  # tracked in git) and is installed only if present.
   local scripts_dir=""
-  
+
   # Check if ./commands/claude-cli exists (most common case)
-  if [[ -f "./commands/claude-cli" ]] && [[ -f "./commands/claude-app" ]]; then
+  if [[ -f "./commands/claude-cli" ]]; then
     scripts_dir="./commands"
   fi
-  
+
   # Check absolute path
   if [[ -z "$scripts_dir" ]] && [[ -f "$(pwd)/commands/claude-cli" ]]; then
     scripts_dir="$(pwd)/commands"
   fi
-  
+
   # Check if we're already in the scripts directory
-  if [[ -z "$scripts_dir" ]] && [[ -f "./claude-cli" ]] && [[ -f "./claude-app" ]]; then
+  if [[ -z "$scripts_dir" ]] && [[ -f "./claude-cli" ]]; then
     scripts_dir="."
   fi
-  
+
   # If still not found, error
   if [[ -z "$scripts_dir" ]]; then
     print_error "Scripts not found!"
-    print_error "Could not locate claude-cli and claude-app"
+    print_error "Could not locate claude-cli"
     return 1
   fi
 
@@ -199,9 +201,7 @@ verify_installation() {
     print_success "claude-app is available"
     echo "  Location: $(which claude-app)"
   else
-    print_error "claude-app not found in PATH"
-    echo "  Make sure $INSTALL_DIR is in your PATH"
-    return 1
+    print_info "claude-app not installed (optional, local-only extra)"
   fi
 
   echo ""
@@ -280,29 +280,28 @@ main() {
   # Look for scripts/ directory relative to current working directory
   
   local scripts_dir=""
-  
+
   # Check if ./commands/claude-cli exists (most common case)
-  if [[ -f "./commands/claude-cli" ]] && [[ -f "./commands/claude-app" ]]; then
+  if [[ -f "./commands/claude-cli" ]]; then
     scripts_dir="./commands"
   fi
-  
+
   # Check absolute path
   if [[ -z "$scripts_dir" ]] && [[ -f "$(pwd)/commands/claude-cli" ]]; then
     scripts_dir="$(pwd)/commands"
   fi
-  
+
   # Check if we're already in the scripts directory
-  if [[ -z "$scripts_dir" ]] && [[ -f "./claude-cli" ]] && [[ -f "./claude-app" ]]; then
+  if [[ -z "$scripts_dir" ]] && [[ -f "./claude-cli" ]]; then
     scripts_dir="."
   fi
-  
+
   # If still not found, error with helpful message
   if [[ -z "$scripts_dir" ]]; then
     print_error "Scripts not found!"
     echo ""
     echo "Expected to find:"
     echo "  - ./commands/claude-cli"
-    echo "  - ./commands/claude-app"
     echo ""
     echo "Make sure you're running from the repository root:"
     echo "  cd /path/to/claude-profile-manager"
