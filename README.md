@@ -26,25 +26,76 @@ This symlinks `claude-cli` into `~/.local/bin` (or `/usr/local/bin` if run with 
 
 To remove it: `./scripts/uninstall-commands.sh`.
 
+<details open>
+<summary>Manual installation</summary>
+
+```bash
+ln -s "$(pwd)/commands/claude-cli" ~/.local/bin/
+chmod +x ~/.local/bin/claude-cli
+
+# Make sure ~/.local/bin is in your PATH, e.g. in ~/.zshrc:
+export PATH="$HOME/.local/bin:$PATH"
+exec zsh
+```
+
+</details>
+
+### Verify installation
+
+```bash
+which claude-cli
+# ~/.local/bin/claude-cli (or /usr/local/bin/claude-cli)
+
+claude-cli
+# with no profiles yet, prints "Missing profile name" and an empty
+# "Available profiles:" list
+```
+
 ## Usage
 
-Create a profile by making a directory for it:
+### Basic syntax
+
+```bash
+claude-cli <profile-name> [claude options...]
+```
+
+Everything after `<profile-name>` is forwarded as-is to the real `claude` command.
+
+### Create a profile
+
+Profiles are just directories — create one and it's picked up automatically:
 
 ```bash
 mkdir -p ~/.claude-perso
 mkdir -p ~/.claude-work
 ```
 
-Then launch Claude with a given profile:
-
 ```bash
 claude-cli perso
-claude-cli work --help   # extra args are passed through to `claude`
 ```
 
 Each profile gets its own `CLAUDE_CONFIG_DIR` at `~/.claude-<profile>/cli`, so sessions, credentials and settings never leak between profiles.
 
-With no arguments, `claude-cli` lists the profiles it found under `~/.claude-*`.
+### List available profiles
+
+```bash
+claude-cli
+# with no argument (and no .claude-profile-manager.conf found), lists the
+# profiles discovered under ~/.claude-*
+
+# or manually:
+ls -d ~/.claude-*/
+```
+
+### Pass arguments through to `claude`
+
+Any flag that isn't the profile name goes straight to the real `claude` CLI:
+
+```bash
+claude-cli perso -p "hey"    # one-off prompt
+claude-cli perso --help      # claude's own help
+claude-cli perso --version
+```
 
 ### Project-local default profile
 
@@ -60,6 +111,52 @@ Running `claude-cli` with no arguments from inside that project (or a subdirecto
 ### Tab completion
 
 `./scripts/install-commands.sh` offers to install it, or run `./scripts/install-completions.sh` directly. Once installed, reload your shell and press TAB after `claude-cli `.
+
+### Tips
+
+Want shorter commands? Add aliases in `~/.zshrc`:
+
+```bash
+alias cperso="claude-cli perso"
+alias cwork="claude-cli work"
+```
+
+`claude-cli` can also be used in scripts, e.g. to pipe output or run in the background:
+
+```bash
+claude-cli perso | tee session.log
+claude-cli work &
+```
+
+## Troubleshooting
+
+**Command not found**
+
+```bash
+echo $PATH   # make sure the install dir (e.g. ~/.local/bin) is listed
+export PATH="$HOME/.local/bin:$PATH"
+exec zsh
+```
+
+**Profile not discovered**
+
+```bash
+ls -la ~/.claude-perso   # create it if missing
+mkdir -p ~/.claude-perso
+```
+
+**`claude` CLI not found**
+
+`claude-cli` requires the `claude` command itself to be installed and on your `PATH` — see https://claude.ai.
+
+**Tab completion not working**
+
+```bash
+ls ~/.zsh/completions/_claude-cli   # or ~/.oh-my-zsh/completions/_claude-cli
+exec zsh
+# still nothing? rebuild the completion cache:
+rm -f ~/.zcompdump* && exec zsh
+```
 
 ## Repository layout
 
