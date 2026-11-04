@@ -14,6 +14,8 @@
 #   - Can be used like any system command (ls, ll, etc.)
 #   - Tab completion support
 #   - Auto-discovers profiles from ~/.claude-*
+#   - If no profile is given, looks for a .claude-profile-manager.conf file
+#     (profile=<name>) in the current directory or its parents, up to $HOME
 #
 # Installation:
 #   sudo cp claude-cli /usr/local/bin/
@@ -34,6 +36,7 @@ readonly HOME_DIR="$HOME"
 source "$SCRIPT_DIR/../lib/colors.sh"
 source "$SCRIPT_DIR/../lib/messages.sh"
 source "$SCRIPT_DIR/../lib/profiles.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
 
 set_tab_color() {
   printf '\033]6;1;bg;red;brightness;%s\a'   "$1"
@@ -46,7 +49,7 @@ reset_tab_color() {
 }
 
 set_badge() {
-  printf '\033]1337;SetBadgeFormat=%s\a' "$(printf '%s' $1\\n$2\ | base64)"
+  printf '\033]1337;SetBadgeFormat=%s\a' "$(printf '%s' $1\ | base64)"
 }
 
 reset_badge() {
@@ -71,21 +74,34 @@ check_claude_cli() {
 # ============================================================================
 
 main() {
-  # Check arguments
-  if [[ $# -eq 0 ]]; then
-    print_error "Missing profile name"
-    echo ""
-    echo "Usage: $SCRIPT_NAME <profile-name>"
-    echo ""
-    echo "Available profiles:"
-    discover_profiles 2>/dev/null | sed 's/^/  - /' || {
-      echo "  (none)"
-    }
-    return 1
-  fi
+  local profile
 
-  local profile="$1"
-  shift  # Remove first argument, pass rest to claude
+  # Check arguments — fall back to a discovered .claude-profile-manager.conf
+  # when no profile is given on the command line.
+  if [[ $# -eq 0 ]]; then
+    local config_file
+    if config_file=$(find_profile_config); then
+      profile=$(get_config_value "$config_file" "profile")
+      if [[ -z "$profile" ]]; then
+        print_error "No 'profile' found in: $config_file"
+        return 1
+      fi
+      print_info "Using profile '$profile' from ${config_file/#$HOME_DIR/~}"
+    else
+      print_error "Missing profile name"
+      echo ""
+      echo "Usage: $SCRIPT_NAME <profile-name>"
+      echo ""
+      echo "Available profiles:"
+      discover_profiles 2>/dev/null | sed 's/^/  - /' || {
+        echo "  (none)"
+      }
+      return 1
+    fi
+  else
+    profile="$1"
+    shift  # Remove first argument, pass rest to claude
+  fi
 
   # Validate profile
   if ! validate_profile "$profile"; then
@@ -103,7 +119,7 @@ main() {
   # Set iTerm badge (profile name + current directory) and make sure it's
   # reset once Claude exits, even on Ctrl-C or an error.
   if [[ -n "$ITERM_SESSION_ID" ]]; then
-    set_badge "${profile:u}" "$(basename "$PWD")"
+    set_badge "${profile:u}"
     trap 'reset_badge' EXIT INT TERM
   fi
 

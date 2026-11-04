@@ -96,7 +96,7 @@ install_scripts() {
 
   # Install each command via a symlink into the install directory
   local cmd
-  for cmd in claude-cli claude-app claude-app-unlink; do
+  for cmd in claude-cli claude-app; do
     print_step "Creating symlink for $cmd..."
 
     if [[ ! -f "$scripts_dir/$cmd" ]]; then
@@ -131,12 +131,10 @@ install_scripts() {
   echo "Usage:"
   echo "  claude-cli <profile>      # Launch Claude CLI"
   echo "  claude-app <profile>      # Launch Claude.app"
-  echo "  claude-app-unlink         # Remove Claude.app profile symlinks"
   echo ""
   echo "Examples:"
   echo "  claude-cli perso"
   echo "  claude-app sfeir"
-  echo "  claude-app-unlink -n      # dry-run"
   echo ""
 
   if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

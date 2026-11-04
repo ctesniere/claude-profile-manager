@@ -48,7 +48,7 @@ remove_symlinks() {
   local removed=0
   local cmd dir target
 
-  for cmd in claude-cli claude-app claude-app-unlink; do
+  for cmd in claude-cli claude-app; do
     for dir in $(candidate_install_dirs); do
       target="$dir/$cmd"
 

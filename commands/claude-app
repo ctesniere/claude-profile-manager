@@ -12,9 +12,10 @@
 # Features:
 #   - Standalone executable (no .zshrc loading required)
 #   - Can be used like any system command (ls, ll, etc.)
-#   - Clears cache for clean profile switching
 #   - Auto-discovers profiles from ~/.claude-*
 #   - iTerm2 badge support
+#   - Swaps Claude.app's macOS Library data via copy/move (no symlinks),
+#     tracked by ~/.claude-app-profile
 #
 # Installation:
 #   sudo cp claude-app /usr/local/bin/
@@ -31,6 +32,7 @@
 readonly SCRIPT_NAME="${0:t}"
 readonly SCRIPT_DIR="${0:A:h}"
 readonly HOME_DIR="$HOME"
+readonly STATE_FILE="$HOME_DIR/.claude-app-profile"
 
 source "$SCRIPT_DIR/../lib/colors.sh"
 source "$SCRIPT_DIR/../lib/messages.sh"
@@ -73,69 +75,68 @@ check_claude_app() {
 # Profile Storage <-> macOS Library mapping
 # ============================================================================
 #
-# APP_STORAGE_MAP is defined in lib/app-storage.sh, shared with
-# claude-app-unlink.
+# APP_STORAGE_MAP is defined in lib/app-storage.sh.
+#
+# Claude.app's Library data is copied/moved in and out of the active
+# profile's storage, tracked by STATE_FILE (~/.claude-app-profile). No
+# symlinks are used, so the Library paths are always real directories that
+# Claude.app can read/write directly.
 #
 # SAFETY:
-#   - remove_symlink ONLY unlinks symlinks — it never deletes a real directory.
-#   - On first run the Library paths are real directories; create_symlink
-#     MIGRATES them into the profile (mv) rather than destroying them. If the
-#     profile already holds data, the stray real directory is moved aside to
-#     "<path>.bak.<pid>" instead of being overwritten.
+#   - save_profile_data only moves the CURRENT Library data into the profile
+#     it belongs to (per STATE_FILE) — it never deletes it.
+#   - activate_profile_data moves aside any real leftover data at the Library
+#     path to "<path>.bak.<pid>" before copying the target profile in, so we
+#     never destroy data we weren't tracking (e.g. the very first run, before
+#     STATE_FILE existed).
 #   - Claude CLI data (~/.claude-*/cli, ~/.claude.json, ~/.config/claude) is
 #     never referenced here.
 #
 # ============================================================================
 
-# Create symlinks from the macOS Library locations into the active profile.
-#   $1 = the profile's app storage dir, e.g. ~/.claude-kering/app
-create_symlink() {
-  local config_dir="$1"
+# Move the current Library data into the given (previously active) profile's
+# storage, overwriting whatever is already there.
+#   $1 = profile name the Library data currently belongs to
+save_profile_data() {
+  local profile="$1"
+  local config_dir="$HOME_DIR/.claude-$profile/app"
   local key profile_target library_path
 
   for key in "${(@k)APP_STORAGE_MAP}"; do
     library_path="${APP_STORAGE_MAP[$key]}"
     profile_target="$config_dir/$key"
 
-    # Ensure the parent of the profile target exists
+    [[ -e "$library_path" ]] || continue
+
     mkdir -p "${profile_target:h}"
-
-    # If the Library path is a REAL entry (not a symlink), migrate it once so
-    # we never lose existing data.
-    if [[ -e "$library_path" && ! -L "$library_path" ]]; then
-      if [[ ! -e "$profile_target" ]]; then
-        mv "$library_path" "$profile_target"
-        print_info "Migrated existing data: ${library_path/#$HOME_DIR/~} → ${profile_target/#$HOME_DIR/~}"
-      else
-        mv "$library_path" "${library_path}.bak.$$"
-        print_warning "Moved stray data aside: ${library_path/#$HOME_DIR/~}.bak.$$"
-      fi
-    fi
-
-    # Make sure the profile target and the Library parent exist
-    mkdir -p "$profile_target"
-    mkdir -p "${library_path:h}"
-
-    # Create (or re-point) the symlink. -f: force, -n: replace an existing
-    # symlink-to-dir instead of creating the link inside it.
-    ln -sfn "$profile_target" "$library_path"
-    print_success "Linked: ${library_path/#$HOME_DIR/~} → ${profile_target/#$HOME_DIR/~}"
+    rm -rf "$profile_target"
+    mv "$library_path" "$profile_target"
+    print_info "Saved: ${library_path/#$HOME_DIR/~} → ${profile_target/#$HOME_DIR/~}"
   done
 }
 
-# Remove the Library symlinks created by create_symlink.
-# ONLY unlinks symlinks — real directories are left untouched.
-remove_symlink() {
-  local config_dir="$1"  # unused, kept for a symmetric signature
-  local key library_path
+# Copy the given profile's storage into the macOS Library locations.
+#   $1 = profile name to activate
+activate_profile_data() {
+  local profile="$1"
+  local config_dir="$HOME_DIR/.claude-$profile/app"
+  local key profile_target library_path
 
   for key in "${(@k)APP_STORAGE_MAP}"; do
     library_path="${APP_STORAGE_MAP[$key]}"
+    profile_target="$config_dir/$key"
 
-    if [[ -L "$library_path" ]]; then
-      rm -f "$library_path"
-      print_info "Unlinked: ${library_path/#$HOME_DIR/~}"
+    mkdir -p "$profile_target"
+    mkdir -p "${library_path:h}"
+
+    # Move any real leftover data aside instead of overwriting it blindly.
+    if [[ -e "$library_path" ]]; then
+      mv "$library_path" "${library_path}.bak.$$"
+      print_warning "Moved stray data aside: ${library_path/#$HOME_DIR/~}.bak.$$"
     fi
+
+    cp -R "$profile_target" "$library_path"
+    print_success "Activated: ${profile_target/#$HOME_DIR/~} → ${library_path/#$HOME_DIR/~}"
   done
 }
 
@@ -143,8 +144,8 @@ remove_symlink() {
 # Quit a running Claude.app
 # ============================================================================
 #
-# The symlinks below feed Claude.app's data directories, so we must not swap
-# them while the app is live (single-instance app → session corruption).
+# Claude.app's data directories are swapped below, so we must not touch them
+# while the app is live (single-instance app → session corruption).
 #
 # If a Claude window is already open, we alert the user and let them choose to
 # close it before switching profile. If they decline, the launch is aborted.
@@ -268,9 +269,19 @@ main() {
     return 1
   fi
 
-  # Swap symlinks: drop the previous profile's links, then link this profile.
-  remove_symlink "$config_dir"
-  create_symlink "$config_dir"
+  # Swap Library data: save whatever profile is currently active, then
+  # activate the requested one. If the requested profile is already active,
+  # leave the live data untouched (avoids overwriting it with a stale copy).
+  local prev_profile=""
+  [[ -f "$STATE_FILE" ]] && prev_profile="$(<"$STATE_FILE")"
+
+  if [[ "$prev_profile" == "$profile" ]]; then
+    print_info "Profile '$profile' is already active — reusing existing data."
+  else
+    [[ -n "$prev_profile" ]] && save_profile_data "$prev_profile"
+    activate_profile_data "$profile"
+    echo "$profile" > "$STATE_FILE"
+  fi
 
   # Launch with profile configuration
   print_info "Starting Claude.app at: $CLAUDE_APP_PATH"
@@ -282,7 +293,7 @@ main() {
   fi
 
   # CLAUDE_CONFIG_DIR uses its OWN dedicated folder ("config"), kept separate
-  # from "data" (which mirrors ~/Library/Application Support/Claude via symlink)
+  # from "data" (which mirrors ~/Library/Application Support/Claude via copy)
   # to avoid any confusion between the two.
   local claude_config_dir="$config_dir/config"
   mkdir -p "$claude_config_dir"
@@ -300,7 +311,7 @@ main() {
   # Check if process is still running
   if ! kill -0 "$app_pid" 2>/dev/null; then
     print_warning "Claude.app may have exited immediately (check system logs)"
-    print_info "Symlinks left in place; run 'claude-app $profile' again to retry."
+    print_info "Profile data left in place; run 'claude-app $profile' again to retry."
     return 1
   fi
 
