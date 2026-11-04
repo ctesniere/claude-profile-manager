@@ -1,1 +1,6 @@
 .DS_Store
+
+# claude-app: kept locally only, not tracked in git
+/commands/claude-app
+/lib/app-storage.sh
+/completions/_claude-app
