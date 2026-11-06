@@ -77,8 +77,9 @@ main() {
   local profile
 
   # Check arguments — fall back to a discovered .claude-profile-manager.conf
-  # when no profile is given on the command line.
-  if [[ $# -eq 0 ]]; then
+  # when no profile is given on the command line, or when the first argument
+  # is actually an option meant for `claude` itself (e.g. --prefill).
+  if [[ $# -eq 0 || "$1" == -* ]]; then
     local config_file
     if config_file=$(find_profile_config); then
       profile=$(get_config_value "$config_file" "profile")
